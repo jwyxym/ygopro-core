@@ -1,0 +1,81 @@
+name: Build WebAssembly
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  push:
+    branches: [ "pendulum-free" ]
+
+jobs:
+  build-wasm:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        build_type: [ wasm_cjs, wasm_esm ]
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v6
+      with:
+        fetch-depth: 1
+
+    - name: Setup Emscripten
+      uses: mymindstorm/setup-emsdk@v14
+      with:
+        version: 3.1.7
+
+    - name: Download lua
+      id: lua
+      uses: mercury233/action-cache-download-file@0e2b8bab566270adae95bd3cd298744402b667eb
+      with:
+        url: https://www.lua.org/ftp/lua-5.4.8.tar.gz
+
+    - name: Lua
+      run: |
+        tar -xzf ${{ steps.lua.outputs.filepath }}
+        mv lua-5.4.8 lua
+        cp premake/lua.lua lua/premake5.lua
+
+    - name: Download sqlite
+      id: sqlite
+      uses: mercury233/action-cache-download-file@0e2b8bab566270adae95bd3cd298744402b667eb
+      with:
+        url: https://www.sqlite.org/2026/sqlite-autoconf-3510300.tar.gz
+
+    - name: SQLite
+      run: |
+        tar -xzf ${{ steps.sqlite.outputs.filepath }}
+        mv sqlite-autoconf-3510300 sqlite3
+
+    - name: Download premake
+      id: premake
+      uses: mercury233/action-cache-download-file@0e2b8bab566270adae95bd3cd298744402b667eb
+      with:
+        url: https://github.com/premake/premake-core/releases/download/v5.0.0-beta7/premake-5.0.0-beta7-linux.tar.gz
+
+    - name: Premake
+      run: |
+        mkdir premake-5
+        tar -C premake-5 -xzf ${{ steps.premake.outputs.filepath }}
+        cp premake/dll.lua dll.lua
+        chmod +x premake-5/premake5
+        ./premake-5/premake5 gmake --file=dll.lua --os=emscripten --sqlite3-dir=sqlite3
+
+    - name: Build ${{ matrix.build_type }}
+      run: |
+        cd build
+        emmake make -j $(nproc) config=release_${{ matrix.build_type }}
+        cd ..
+        mkdir -p dist/${{ matrix.build_type }}
+        cp build/bin/${{ matrix.build_type }}/Release/libocgcore.* dist/${{ matrix.build_type }}/
+        cp build/bin/${{ matrix.build_type }}/Release/libsqlite3.* dist/${{ matrix.build_type }}/ || true
+
+    - name: Upload ${{ matrix.build_type }} artifacts
+      uses: actions/upload-artifact@v6
+      with:
+        name: ocgcore-${{ matrix.build_type }}
+        path: dist/${{ matrix.build_type }}
