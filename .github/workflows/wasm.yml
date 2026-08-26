@@ -12,11 +12,6 @@ jobs:
   build-wasm:
     runs-on: ubuntu-latest
 
-    strategy:
-      fail-fast: false
-      matrix:
-        build_type: [ wasm_cjs, wasm_esm ]
-
     steps:
     - name: Checkout
       uses: actions/checkout@v6
@@ -65,17 +60,67 @@ jobs:
         chmod +x premake-5/premake5
         ./premake-5/premake5 gmake --file=dll.lua --os=emscripten --sqlite3-dir=sqlite3
 
-    - name: Build ${{ matrix.build_type }}
+    - name: Build wasm_cjs
       run: |
         cd build
-        emmake make -j $(nproc) config=release_${{ matrix.build_type }}
+        emmake make -j $(nproc) config=release_wasm_cjs
         cd ..
-        mkdir -p dist/${{ matrix.build_type }}
-        cp build/bin/${{ matrix.build_type }}/Release/libocgcore.* dist/${{ matrix.build_type }}/
-        cp build/bin/${{ matrix.build_type }}/Release/libsqlite3.* dist/${{ matrix.build_type }}/ || true
+        mkdir -p dist/wasm_cjs
+        cp build/bin/wasm_cjs/Release/libocgcore.* dist/wasm_cjs/
+        cp build/bin/wasm_cjs/Release/libsqlite3.* dist/wasm_cjs/ || true
 
-    - name: Upload ${{ matrix.build_type }} artifacts
+    - name: Upload wasm_cjs artifacts
       uses: actions/upload-artifact@v6
       with:
-        name: ocgcore-${{ matrix.build_type }}
-        path: dist/${{ matrix.build_type }}
+        name: ocgcore-wasm-cjs
+        path: dist/wasm_cjs
+
+  create-release:
+    needs: [build-wasm]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: build
+
+      - name: Create release-latest
+        run: |
+          cd build
+          cd ocgcore-wasm-cjs
+          zip -r ../ocgcore-wasm-cjs.zip ./*
+          cd ..
+          gh release delete wasm-latest --cleanup-tag -y || true
+          gh release create wasm-latest $(find . -type f -name "*.zip") \
+            --target "$GITHUB_SHA" \
+            --title "wasm-latest" \
+            --notes "Latest wasm for ${{ github.ref_name }}" \
+            --latest
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  push-to-server:
+    needs: [build-wasm]
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: build
+
+    - name: Deploy to Server via SFTP
+      uses: wlixcc/SFTP-Deploy-Action@v1.2.5
+      with:
+        username: ${{ secrets.SSH_USER }}
+        server: ${{ secrets.SSH_SERVER }}
+        port: 22
+        local_path: './build/ocgcore-wasm-cjs/*'
+        remote_path: ${{ secrets.SSH_PATH }}
+        sftp_only: true
+        ssh_private_key: ${{ secrets.SSH_PRIVATE_KEY }}
